@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=ESP Reader
+Comment=ESP32 Data Reader Application
+Exec=esp_reader
+Icon=esp_reader
+Categories=Utility;Development;
+Terminal=false

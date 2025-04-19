@@ -1,140 +1,52 @@
-#include <QApplication>
-#include <QWidget>
-#include <QVBoxLayout>
-#include <QPushButton>
-#include <QTextEdit>
-#include <QComboBox>
+#include <QCoreApplication>
 #include <QSerialPort>
 #include <QSerialPortInfo>
+#include <QObject>
+#include <QTextStream>
+#include <QTimer>
 #include <QString>
 #include <QDebug>
-#include <QTimer>
 
-class ESPReaderApp : public QWidget
+class SerialReader : public QObject
 {
     Q_OBJECT
 
 public:
-    ESPReaderApp(QWidget *parent = nullptr) 
-        : QWidget(parent), 
-          serialPort(new QSerialPort(this))
+    SerialReader(QObject *parent = nullptr)
+        : QObject(parent), serialPort(new QSerialPort(this))
     {
-        setupUI();
-        setupSerial();
-    }
-
-private slots:
-    void refreshPorts()
-    {
-        portSelector->clear();
-        bool foundValidPort = false;
-
+        // Search for a valid serial port based on OS-specific criteria
         const auto ports = QSerialPortInfo::availablePorts();
-        for (const QSerialPortInfo &portInfo : ports) {
-            QString portName = portInfo.portName();
-            
-            #if defined(Q_OS_LINUX)
-            if (portName.startsWith("ttyUSB") || portName.startsWith("ttyACM")) {
-                portName = "/dev/" + portName;
-                foundValidPort = true;
+        for (const QSerialPortInfo &info : ports) {
+#if defined(Q_OS_LINUX)
+            if (info.portName().startsWith("ttyUSB") || info.portName().startsWith("ttyACM")) {
+                m_portName = "/dev/" + info.portName();
+                break;
             }
-            #elif defined(Q_OS_WIN)
-            foundValidPort = true;
-            #elif defined(Q_OS_MACOS)
-            if (portName.startsWith("cu.")) {
-                portName = "/dev/" + portName;
-                foundValidPort = true;
+#elif defined(Q_OS_WIN)
+            m_portName = info.portName();
+            break;
+#elif defined(Q_OS_MACOS)
+            if (info.portName().startsWith("cu.")) {
+                m_portName = "/dev/" + info.portName();
+                break;
             }
-            #endif
-
-            if (foundValidPort) {
-                portSelector->addItem(portName, portName);
-            }
+#endif
         }
-
-        if (!foundValidPort) {
-            portSelector->addItem("No serial ports found");
-            readButton->setEnabled(false);
+        if (m_portName.isEmpty()) {
+            QTextStream(stdout) << "No valid serial ports found.\n";
         }
     }
 
-    void toggleReading()
-    {
-        if (isReading) {
-            stopReading();
-        } else {
-            startReading();
-        }
-    }
-
-    void handleReadyRead()
-    {
-        QByteArray data = serialPort->readAll();
-        buffer += QString::fromUtf8(data);
-
-        processBuffer();
-    }
-
-    void handleError(QSerialPort::SerialPortError error)
-    {
-        if (error != QSerialPort::NoError) {
-            output->append("Error: " + serialPort->errorString());
-            stopReading();
-        }
-    }
-
-private:
-    void setupUI()
-    {
-        setWindowTitle("ESP32 Data Reader");
-        setGeometry(100, 100, 600, 400);
-
-        QVBoxLayout *mainLayout = new QVBoxLayout(this);
-
-        // Port selection
-        QHBoxLayout *portLayout = new QHBoxLayout();
-        portSelector = new QComboBox(this);
-        QPushButton *refreshButton = new QPushButton("Refresh", this);
-        portLayout->addWidget(portSelector);
-        portLayout->addWidget(refreshButton);
-
-        // Control buttons
-        readButton = new QPushButton("Start Reading", this);
-        QPushButton *clearButton = new QPushButton("Clear Output", this);
-
-        // Text output
-        output = new QTextEdit(this);
-        output->setReadOnly(true);
-
-        // Assemble layout
-        mainLayout->addLayout(portLayout);
-        mainLayout->addWidget(readButton);
-        mainLayout->addWidget(clearButton);
-        mainLayout->addWidget(output);
-
-        // Connections
-        connect(refreshButton, &QPushButton::clicked, this, &ESPReaderApp::refreshPorts);
-        connect(readButton, &QPushButton::clicked, this, &ESPReaderApp::toggleReading);
-        connect(clearButton, &QPushButton::clicked, output, &QTextEdit::clear);
-
-        refreshPorts();
-    }
-
-    void setupSerial()
-    {
-        connect(serialPort, &QSerialPort::readyRead, this, &ESPReaderApp::handleReadyRead);
-        connect(serialPort, &QSerialPort::errorOccurred, this, &ESPReaderApp::handleError);
-    }
-
+public slots:
     void startReading()
     {
-        QString portName = portSelector->currentData().toString();
-        if (portName.isEmpty()) {
-            output->append("Invalid port selected");
+        if (m_portName.isEmpty()) {
+            QCoreApplication::quit();
             return;
         }
 
-        serialPort->setPortName(portName);
+        serialPort->setPortName(m_portName);
         serialPort->setBaudRate(QSerialPort::Baud115200);
         serialPort->setDataBits(QSerialPort::Data8);
         serialPort->setParity(QSerialPort::NoParity);
@@ -142,58 +54,36 @@ private:
         serialPort->setFlowControl(QSerialPort::NoFlowControl);
 
         if (serialPort->open(QIODevice::ReadOnly)) {
-            isReading = true;
-            readButton->setText("Stop Reading");
-            output->append("Started reading from " + portName);
-            buffer.clear();
+            QTextStream(stdout) << "Started reading from " << m_portName << "\n";
+            connect(serialPort, &QSerialPort::readyRead, this, &SerialReader::handleReadyRead);
         } else {
-            output->append("Failed to open port: " + serialPort->errorString());
+            QTextStream(stdout) << "Failed to open port " << m_portName << ": " 
+                                  << serialPort->errorString() << "\n";
+            QCoreApplication::quit();
         }
     }
 
-    void stopReading()
+    void handleReadyRead()
     {
-        if (serialPort->isOpen()) {
-            serialPort->close();
-        }
-        isReading = false;
-        readButton->setText("Start Reading");
-        output->append("Stopped reading");
+        QByteArray data = serialPort->readAll();
+        QString text = QString::fromUtf8(data);
+        QTextStream(stdout) << "Received: " << text.trimmed() << "\n";
     }
 
-    void processBuffer()
-    {
-        int startIndex = buffer.indexOf("START");
-        int endIndex = buffer.indexOf("END");
-
-        if (startIndex != -1 && endIndex != -1 && endIndex > startIndex) {
-            QString message = buffer.mid(startIndex + 5, endIndex - startIndex - 5);
-            output->append("Received:\n" + message.trimmed());
-            buffer.remove(0, endIndex + 3);
-        }
-    }
-
-    QComboBox *portSelector;
-    QPushButton *readButton;
-    QTextEdit *output;
+private:
     QSerialPort *serialPort;
-    
-    QString buffer;
-    bool isReading = false;
+    QString m_portName;
 };
 
 int main(int argc, char *argv[])
 {
-    QApplication app(argc, argv);
+    QCoreApplication app(argc, argv);
     
-    // Set style
-    QApplication::setStyle("Fusion");
-    
-    ESPReaderApp reader;
-    reader.show();
-    
+    SerialReader reader;
+    // Use a single shot timer to start reading after the app event loop starts
+    QTimer::singleShot(0, &reader, SLOT(startReading()));
+
     return app.exec();
 }
 
 #include "main.moc"
-

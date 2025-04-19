@@ -1,16 +1,16 @@
 ### Installations:
 ```
 sudo apt update
-sudo apt install libqt5serialport5-dev
+sudo apt-get install libqt5serialport5-dev
 ```
 
-### Building:
+### Building From Source:
 
 ```
 cd {path to esp_reader}
 mkdir build
 cd build
-cmake ..
+qmake ..
 ls #to verify that Makefile is generated
 make
 ```
